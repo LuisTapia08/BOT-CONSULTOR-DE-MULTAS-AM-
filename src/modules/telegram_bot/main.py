@@ -33,6 +33,36 @@ def apagar_arquivo_local(caminho):
         print(f"Não consegui apagar o arquivo {caminho}: {erro}")
 
 
+def obter_legenda_pdf(caminho):
+    nome_arquivo = os.path.basename(caminho).lower()
+
+    if "boleto" in nome_arquivo:
+        return "Boleto/Pix da multa"
+
+    if "notificacao_autuacao" in nome_arquivo:
+        return "Notificação de Autuação"
+
+    if "certidao" in nome_arquivo:
+        return "Certidão negativa de multas"
+
+    return "Documento gerado"
+
+
+def obter_legenda_imagem(caminho):
+    nome_arquivo = os.path.basename(caminho).lower()
+
+    if "erro" in nome_arquivo:
+        return "Print do erro encontrado"
+
+    if "sem_multa" in nome_arquivo:
+        return "O veículo em questão não possui multas"
+
+    if "nip" in nome_arquivo:
+        return "Informações da multa NIP"
+
+    return "Informações da multa"
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("Consultar multas", callback_data="consulta_multa")],
@@ -60,6 +90,63 @@ async def escolher_opcao(update: Update, context: ContextTypes.DEFAULT_TYPE):
         texto = "Você escolheu: Certidão negativa de multas.\n\nDigite o RENAVAM:"
 
     await query.edit_message_text(texto)
+
+
+async def enviar_arquivos(update: Update, arquivos, legenda_imagem_principal=None):
+    if not arquivos:
+        return
+
+    legenda_principal_usada = False
+
+    for item in arquivos:
+        caminho = item.get("caminho")
+        tipo = item.get("tipo")
+
+        if not caminho:
+            continue
+
+        if not os.path.exists(caminho):
+            print(f"Arquivo não encontrado para envio: {caminho}")
+            await update.message.reply_text(
+                f"Arquivo gerado, mas não encontrado no PC: {caminho}"
+            )
+            continue
+
+        try:
+            if tipo == "pdf":
+                legenda = obter_legenda_pdf(caminho)
+
+                with open(caminho, "rb") as documento:
+                    await update.message.reply_document(
+                        document=documento,
+                        caption=legenda
+                    )
+
+                apagar_arquivo_local(caminho)
+
+            elif tipo == "imagem":
+                if legenda_imagem_principal and not legenda_principal_usada:
+                    legenda = legenda_imagem_principal
+                    legenda_principal_usada = True
+                else:
+                    legenda = obter_legenda_imagem(caminho)
+
+                with open(caminho, "rb") as imagem:
+                    await update.message.reply_photo(
+                        photo=imagem,
+                        caption=legenda
+                    )
+
+                apagar_arquivo_local(caminho)
+
+            else:
+                print(f"Tipo de arquivo desconhecido: {tipo}")
+
+        except Exception as erro:
+            print(f"Erro ao enviar ou apagar arquivo: {erro}")
+            await update.message.reply_text(
+                "Ocorreu um erro ao enviar um dos arquivos."
+            )
 
 
 async def receber_renavam(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -96,39 +183,24 @@ async def receber_renavam(update: Update, context: ContextTypes.DEFAULT_TYPE):
             renavam
         )
 
-    await update.message.reply_text(resultado["mensagem"])
+    print("Resultado da automação:", resultado)
+    print("Arquivos para envio:", resultado.get("arquivos", []))
 
     arquivos = resultado.get("arquivos", [])
+    possui_imagem = any(
+        item.get("tipo") == "imagem"
+        for item in arquivos
+    )
 
-    for item in arquivos:
-        caminho = item.get("caminho")
-        tipo = item.get("tipo")
-
-        if caminho and os.path.exists(caminho):
-            try:
-                if tipo == "pdf":
-                    with open(caminho, "rb") as documento:
-                        await update.message.reply_document(
-                            documento,
-                            caption="Documento gerado"
-                        )
-
-                    apagar_arquivo_local(caminho)
-
-                elif tipo == "imagem":
-                    with open(caminho, "rb") as imagem:
-                        await update.message.reply_photo(
-                            imagem,
-                            caption="Informações da multa"
-                        )
-
-                    apagar_arquivo_local(caminho)
-
-            except Exception as erro:
-                print(f"Erro ao enviar ou apagar arquivo: {erro}")
-                await update.message.reply_text(
-                    "Ocorreu um erro ao enviar um dos arquivos."
-                )
+    if possui_imagem:
+        await enviar_arquivos(
+            update,
+            arquivos,
+            legenda_imagem_principal=resultado["mensagem"]
+        )
+    else:
+        await update.message.reply_text(resultado["mensagem"])
+        await enviar_arquivos(update, arquivos)
 
     context.user_data.clear()
 
